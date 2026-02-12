@@ -1,8 +1,11 @@
+import logging
 import anthropic
 from pathlib import Path
 
 from app.config import ANTHROPIC_API_KEY, MODEL, MAX_TOKENS
 from app.system_prompt import SYSTEM_PROMPT
+
+logger = logging.getLogger("payroll")
 
 BETAS = ["code-execution-2025-08-25", "files-api-2025-04-14"]
 
@@ -34,12 +37,14 @@ def analyze_spreadsheet(session_id: str, user_message: str) -> str:
         raise ValueError(f"No session found for {session_id}")
 
     file_id = session["file_id"]
+    turn_number = len([m for m in session["messages"] if m["role"] == "user"]) + 1
 
     # Build user content blocks
     user_content = []
 
     # On first message, attach the file
     if not session["messages"]:
+        logger.info("[session=%s] First message - attaching file_id=%s", session_id[:8], file_id)
         user_content.append({"type": "container_upload", "file_id": file_id})
 
     user_content.append({"type": "text", "text": user_message})
@@ -58,13 +63,18 @@ def analyze_spreadsheet(session_id: str, user_message: str) -> str:
 
     # Reuse container if we have one from a previous turn
     if session.get("container_id"):
+        logger.info("[session=%s] Reusing container=%s", session_id[:8], session["container_id"])
         kwargs["container"] = session["container_id"]
 
+    logger.info("[session=%s] Calling Anthropic API (turn %d, model=%s)...", session_id[:8], turn_number, MODEL)
     response = client.beta.messages.create(**kwargs)
+    logger.info("[session=%s] Response received: stop_reason=%s, %d content blocks", session_id[:8], response.stop_reason, len(response.content))
 
     # Handle pause_turn: keep calling until we get a full response
+    continuation = 0
     while response.stop_reason == "pause_turn":
-        # Append the assistant's partial response and continue
+        continuation += 1
+        logger.info("[session=%s] pause_turn - sending continuation %d...", session_id[:8], continuation)
         session["messages"].append({"role": "assistant", "content": response.content})
         session["messages"].append({"role": "user", "content": [{"type": "text", "text": "Please continue."}]})
 
@@ -74,10 +84,12 @@ def analyze_spreadsheet(session_id: str, user_message: str) -> str:
 
         kwargs["messages"] = session["messages"]
         response = client.beta.messages.create(**kwargs)
+        logger.info("[session=%s] Continuation %d response: stop_reason=%s", session_id[:8], continuation, response.stop_reason)
 
     # Extract container_id for reuse
     if hasattr(response, "container") and response.container:
         session["container_id"] = response.container.id
+        logger.info("[session=%s] Container saved: %s", session_id[:8], session["container_id"])
 
     # Parse response content blocks into markdown
     reply_parts = []
@@ -86,7 +98,7 @@ def analyze_spreadsheet(session_id: str, user_message: str) -> str:
             if block.type == "text":
                 reply_parts.append(block.text)
             elif block.type == "server_tool_use":
-                # Optionally show the code Claude executed
+                logger.info("[session=%s] Code execution: tool=%s", session_id[:8], block.name)
                 if hasattr(block, "input"):
                     inp = block.input
                     if isinstance(inp, dict) and "command" in inp:
@@ -95,6 +107,7 @@ def analyze_spreadsheet(session_id: str, user_message: str) -> str:
                         )
 
     full_reply = "\n".join(reply_parts)
+    logger.info("[session=%s] Reply assembled: %d chars", session_id[:8], len(full_reply))
 
     # Store assistant turn for multi-turn conversation
     session["messages"].append({"role": "assistant", "content": response.content})
