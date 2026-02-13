@@ -25,12 +25,12 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 @app.get("/")
-async def index():
+def index():
     return FileResponse("static/index.html")
 
 
 @app.get("/api/health/metrics")
-async def health_metrics():
+def health_metrics():
     return {"status": "ok", "active_sessions": len(sessions)}
 
 
@@ -71,7 +71,7 @@ async def handle_upload(file: UploadFile = File(...)):
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def handle_chat(req: ChatRequest):
+def handle_chat(req: ChatRequest):
     """Send a chat message. First message triggers full analysis; subsequent are follow-ups."""
     logger.info("POST /api/chat - session=%s message=%s", req.session_id, req.message[:80])
 
