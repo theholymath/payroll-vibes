@@ -29,6 +29,11 @@ async def index():
     return FileResponse("static/index.html")
 
 
+@app.get("/api/health/metrics")
+async def health_metrics():
+    return {"status": "ok", "active_sessions": len(sessions)}
+
+
 @app.post("/api/upload")
 async def handle_upload(file: UploadFile = File(...)):
     """Upload a spreadsheet, send to Anthropic Files API, return session info."""
